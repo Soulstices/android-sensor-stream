@@ -1,17 +1,20 @@
 package com.example.myapplication
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Bundle
 import android.view.Surface
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +27,7 @@ import com.example.myapplication.ui.theme.MyApplicationTheme
 class MainActivity : ComponentActivity() {
     private var serviceIntent: Intent? = null
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -42,10 +46,11 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         // Stop the service when activity is destroyed (optional)
-        // serviceIntent?.let { stopService(it) }
+         serviceIntent?.let { stopService(it) }
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun SensorUdpStreamer() {
     val context = LocalContext.current
@@ -57,16 +62,16 @@ fun SensorUdpStreamer() {
     val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
     val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
-    var accelData by remember { mutableStateOf(FloatArray(3) { 0f }) }
-    var gyroData by remember { mutableStateOf(FloatArray(3) { 0f }) }
-    var magData by remember { mutableStateOf(FloatArray(3) { 0f }) }
+    var accelData by remember { mutableStateOf(FloatArray(3)) }
+    var gyroData by remember { mutableStateOf(FloatArray(3)) }
+    var magData by remember { mutableStateOf(FloatArray(3)) }
     var rotation by remember { mutableStateOf("Unknown") }
     var serviceStatus by remember { mutableStateOf("Background Service Running") }
 
     // Get rotation using non-deprecated API
     LaunchedEffect(Unit) {
         try {
-            val display = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 context.display
             } else {
                 @Suppress("DEPRECATION")
@@ -184,6 +189,7 @@ fun SensorUdpStreamer() {
     }
 }
 
+@SuppressLint("DefaultLocale")
 @Composable
 fun SensorSection(title: String, values: FloatArray) {
     Column {

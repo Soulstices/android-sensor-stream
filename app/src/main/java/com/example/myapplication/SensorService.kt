@@ -37,9 +37,9 @@ class SensorService : Service(), SensorEventListener {
     private var gyroscope: Sensor? = null
     private var magnetometer: Sensor? = null
 
-    private var accelData = FloatArray(3) { 0f }
-    private var gyroData = FloatArray(3) { 0f }
-    private var magData = FloatArray(3) { 0f }
+    private var accelData = FloatArray(3)
+    private var gyroData = FloatArray(3)
+    private var magData = FloatArray(3)
     private var rotation = "Unknown"
 
     private var wakeLock: PowerManager.WakeLock? = null
