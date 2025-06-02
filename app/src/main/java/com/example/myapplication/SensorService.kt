@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -29,17 +28,19 @@ class SensorService : Service(), SensorEventListener {
         const val CHANNEL_ID = "SensorServiceChannel"
         const val TARGET_IP = "10.47.80.118"
         const val TARGET_PORT = 9999
-        const val UPDATE_INTERVAL = 100L // milliseconds
+        const val UPDATE_INTERVAL = 5L // milliseconds
     }
 
     private lateinit var sensorManager: SensorManager
     private var accelerometer: Sensor? = null
     private var gyroscope: Sensor? = null
     private var magnetometer: Sensor? = null
+    private var rotationVector: Sensor? = null
 
     private var accelData = FloatArray(3)
     private var gyroData = FloatArray(3)
     private var magData = FloatArray(3)
+    private var orientationAngles = FloatArray(3)
     private var rotation = "Unknown"
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -49,27 +50,22 @@ class SensorService : Service(), SensorEventListener {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize sensor manager
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        rotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
-        // Get device rotation
         getDeviceRotation()
 
-        // Acquire wake lock to keep CPU active
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "SensorService::WakeLock"
         )
-        wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes, will be renewed
+        wakeLock?.acquire(10 * 60 * 1000L)
 
-        // Register sensor listeners
         registerSensorListeners()
-
-        // Start UDP streaming
         startUdpStreaming()
     }
 
@@ -77,14 +73,11 @@ class SensorService : Service(), SensorEventListener {
         createNotificationChannel()
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
-
-        return START_STICKY // Restart service if killed
+        return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
-
-        // Cleanup
         sensorManager.unregisterListener(this)
         wakeLock?.release()
         udpSocket?.close()
@@ -103,7 +96,6 @@ class SensorService : Service(), SensorEventListener {
                 description = "Streaming sensor data in background"
                 setShowBadge(false)
             }
-
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
         }
@@ -115,7 +107,6 @@ class SensorService : Service(), SensorEventListener {
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Sensor Streaming Active")
             .setContentText("Streaming sensor data to $TARGET_IP:$TARGET_PORT")
@@ -135,6 +126,9 @@ class SensorService : Service(), SensorEventListener {
         magnetometer?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
+        rotationVector?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
     }
 
     private fun getDeviceRotation() {
@@ -143,9 +137,8 @@ class SensorService : Service(), SensorEventListener {
                 display
             } else {
                 @Suppress("DEPRECATION")
-                (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
+                (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay
             }
-
             val rotConst = display?.rotation ?: Surface.ROTATION_0
             rotation = when (rotConst) {
                 Surface.ROTATION_0 -> "ROTATION_0"
@@ -182,6 +175,11 @@ class SensorService : Service(), SensorEventListener {
                                 put("y", magData[1])
                                 put("z", magData[2])
                             })
+                            put("orientation", JSONObject().apply {
+                                put("yaw", orientationAngles[0])
+                                put("pitch", orientationAngles[1])
+                                put("roll", orientationAngles[2])
+                            })
                             put("rotation", rotation)
                             put("timestamp", System.currentTimeMillis())
                         }
@@ -195,24 +193,17 @@ class SensorService : Service(), SensorEventListener {
                             InetAddress.getByName(TARGET_IP),
                             TARGET_PORT
                         )
-
                         udpSocket?.send(packet)
 
-                        // Renew wake lock periodically
-                        if (System.currentTimeMillis() % 300000 < UPDATE_INTERVAL) { // Every 5 minutes
+                        if (System.currentTimeMillis() % 300000 < UPDATE_INTERVAL) {
                             wakeLock?.let { wl ->
-                                if (wl.isHeld) {
-                                    wl.release()
-                                }
+                                if (wl.isHeld) wl.release()
                                 wl.acquire(10 * 60 * 1000L)
                             }
                         }
-
                     } catch (e: Exception) {
                         e.printStackTrace()
-                        // Continue streaming even if one packet fails
                     }
-
                     delay(UPDATE_INTERVAL)
                 }
             } catch (e: Exception) {
@@ -221,16 +212,21 @@ class SensorService : Service(), SensorEventListener {
         }
     }
 
-    // SensorEventListener methods
     override fun onSensorChanged(event: SensorEvent) {
         when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> accelData = event.values.copyOf()
             Sensor.TYPE_GYROSCOPE -> gyroData = event.values.copyOf()
             Sensor.TYPE_MAGNETIC_FIELD -> magData = event.values.copyOf()
+            Sensor.TYPE_ROTATION_VECTOR -> {
+                val rotationMatrix = FloatArray(9)
+                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                SensorManager.getOrientation(rotationMatrix, orientationAngles)
+                for (i in 0..2) {
+                    orientationAngles[i] = Math.toDegrees(orientationAngles[i].toDouble()).toFloat()
+                }
+            }
         }
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // Handle accuracy changes if needed
-    }
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 }
