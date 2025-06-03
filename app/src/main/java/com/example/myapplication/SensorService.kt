@@ -13,9 +13,6 @@ import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.view.Surface
-import android.view.WindowManager
-import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.net.DatagramPacket
@@ -29,6 +26,7 @@ class SensorService : Service(), SensorEventListener {
         const val TARGET_IP = "10.47.80.118"
         const val TARGET_PORT = 9999
         const val UPDATE_INTERVAL = 5L // milliseconds
+        const val EXTRA_LOGGING_ENABLED = "logging_enabled"
     }
 
     private lateinit var sensorManager: SensorManager
@@ -41,7 +39,7 @@ class SensorService : Service(), SensorEventListener {
     private var gyroData = FloatArray(3)
     private var magData = FloatArray(3)
     private var orientationAngles = FloatArray(3)
-    private var rotation = "Unknown"
+    private var loggingEnabled = false
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var udpSocket: DatagramSocket? = null
@@ -56,8 +54,6 @@ class SensorService : Service(), SensorEventListener {
         magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
         rotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
-        getDeviceRotation()
-
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
@@ -70,6 +66,10 @@ class SensorService : Service(), SensorEventListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        intent?.let {
+            loggingEnabled = it.getBooleanExtra(EXTRA_LOGGING_ENABLED, false)
+        }
+
         createNotificationChannel()
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
@@ -107,13 +107,24 @@ class SensorService : Service(), SensorEventListener {
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Sensor Streaming Active")
-            .setContentText("Streaming sensor data to $TARGET_IP:$TARGET_PORT")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .build()
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("Sensor Streaming Active")
+                .setContentText("Streaming sensor data to $TARGET_IP:$TARGET_PORT")
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+                .setContentTitle("Sensor Streaming Active")
+                .setContentText("Streaming sensor data to $TARGET_IP:$TARGET_PORT")
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .build()
+        }
     }
 
     private fun registerSensorListeners() {
@@ -128,27 +139,6 @@ class SensorService : Service(), SensorEventListener {
         }
         rotationVector?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-    }
-
-    private fun getDeviceRotation() {
-        try {
-            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                display
-            } else {
-                @Suppress("DEPRECATION")
-                (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay
-            }
-            val rotConst = display?.rotation ?: Surface.ROTATION_0
-            rotation = when (rotConst) {
-                Surface.ROTATION_0 -> "ROTATION_0"
-                Surface.ROTATION_90 -> "ROTATION_90"
-                Surface.ROTATION_180 -> "ROTATION_180"
-                Surface.ROTATION_270 -> "ROTATION_270"
-                else -> "Unknown"
-            }
-        } catch (e: Exception) {
-            rotation = "Error getting rotation"
         }
     }
 
@@ -180,7 +170,7 @@ class SensorService : Service(), SensorEventListener {
                                 put("pitch", orientationAngles[1])
                                 put("roll", orientationAngles[2])
                             })
-                            put("rotation", rotation)
+                            put("logging", loggingEnabled)
                             put("timestamp", System.currentTimeMillis())
                         }
 

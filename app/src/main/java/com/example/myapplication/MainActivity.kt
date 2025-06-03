@@ -4,28 +4,29 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.hardware.Sensor
-import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
-import android.view.Surface
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -79,27 +80,24 @@ fun SensorUdpStreamer() {
     var gyroData by remember { mutableStateOf(FloatArray(3)) }
     var magData by remember { mutableStateOf(FloatArray(3)) }
     var orientationAngles by remember { mutableStateOf(FloatArray(3)) }
-    var rotation by remember { mutableStateOf("Unknown") }
-    var serviceStatus by remember { mutableStateOf("🟢 Background Service Running") }
+    var serviceStatus by remember { mutableStateOf("🟢 Service Running") }
+    var isServiceRunning by remember { mutableStateOf(true) }
+    var loggingEnabled by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        try {
-            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                context.display
-            } else {
-                @Suppress("DEPRECATION")
-                (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
+    // Function to handle service status changes
+    val onServiceStatusChange: (String, Boolean) -> Unit = { status, running ->
+        serviceStatus = status
+        isServiceRunning = running
+    }
+
+    // Function to restart service with logging state
+    val restartServiceWithLogging: () -> Unit = {
+        if (isServiceRunning) {
+            val intent = Intent(context, SensorService::class.java).apply {
+                putExtra("logging_enabled", loggingEnabled)
             }
-            val rotConst = display?.rotation ?: Surface.ROTATION_0
-            rotation = when (rotConst) {
-                Surface.ROTATION_0 -> "🔄 ROTATION_0"
-                Surface.ROTATION_90 -> "🔄 ROTATION_90"
-                Surface.ROTATION_180 -> "🔄 ROTATION_180"
-                Surface.ROTATION_270 -> "🔄 ROTATION_270"
-                else -> "Unknown"
-            }
-        } catch (e: Exception) {
-            rotation = "❌ Error getting rotation"
+            context.stopService(intent)
+            context.startForegroundService(intent)
         }
     }
 
@@ -141,15 +139,19 @@ fun SensorUdpStreamer() {
         modifier = Modifier
             .fillMaxSize()
             .background(
-                Brush.verticalGradient(
+                Brush.radialGradient(
                     colors = listOf(
-                        Color(0xFF0F0F23),
                         Color(0xFF1A1A2E),
-                        Color(0xFF16213E)
-                    )
+                        Color(0xFF0F0F23),
+                        Color(0xFF000000)
+                    ),
+                    radius = 1200f
                 )
             )
     ) {
+        // Animated background particles
+        AnimatedBackgroundParticles()
+
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent
@@ -157,178 +159,330 @@ fun SensorUdpStreamer() {
             Column(
                 modifier = Modifier
                     .padding(padding)
-                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
                     .verticalScroll(scrollState),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Header Card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(8.dp, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF1E1E2E).copy(alpha = 0.9f)
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            "📱 Android Sensor Stream",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF74C0FC)
-                        )
-                        Text(
-                            "🌐 Target: $targetIp:$targetPort",
-                            fontSize = 14.sp,
-                            color = Color(0xFFADB5BD)
-                        )
-                        Text(
-                            "🛠️ Status: $serviceStatus",
-                            fontSize = 14.sp,
-                            color = Color(0xFF51CF66)
-                        )
-                        Text(
-                            "🔒 Note: Service runs even when screen is off",
-                            fontSize = 12.sp,
-                            color = Color(0xFF868E96)
-                        )
+                // Enhanced Header Card
+                EnhancedHeaderCard(
+                    targetIp = targetIp,
+                    targetPort = targetPort,
+                    serviceStatus = serviceStatus,
+                    isServiceRunning = isServiceRunning,
+                    context = context,
+                    onServiceStatusChange = onServiceStatusChange,
+                    loggingEnabled = loggingEnabled,
+                    onLoggingToggle = { enabled ->
+                        loggingEnabled = enabled
+                        restartServiceWithLogging()
                     }
+                )
+
+                // Enhanced Orientation Card
+                if (rotationVector != null) {
+                    EnhancedOrientationCard(orientationAngles)
                 }
 
-                // Orientation Card
-                if (rotationVector != null) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .shadow(8.dp, RoundedCornerShape(16.dp)),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF2D1B69).copy(alpha = 0.8f)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(20.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Text(
-                                "🎯 Device Orientation",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
-                                color = Color(0xFF9775FA)
+                // Enhanced Motion Sensors Card
+                EnhancedMotionSensorsCard(accelData, gyroData, magData)
+
+                Spacer(modifier = Modifier.height(32.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun AnimatedBackgroundParticles() {
+    val infiniteTransition = rememberInfiniteTransition(label = "particles")
+
+    repeat(8) { index ->
+        val animatedOffset by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(
+                    durationMillis = (8000 + index * 1000),
+                    easing = LinearEasing
+                )
+            ),
+            label = "particle_$index"
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(
+                    x = (50 + index * 40).dp,
+                    y = (100 + index * 80).dp
+                )
+                .size((4 + index % 3).dp)
+                .rotate(animatedOffset)
+                .alpha(0.1f + (index % 3) * 0.05f)
+                .background(
+                    Color.White,
+                    CircleShape
+                )
+        )
+    }
+}
+
+@Composable
+fun EnhancedHeaderCard(
+    targetIp: String,
+    targetPort: Int,
+    serviceStatus: String,
+    isServiceRunning: Boolean,
+    context: Context,
+    onServiceStatusChange: (String, Boolean) -> Unit,
+    loggingEnabled: Boolean,
+    onLoggingToggle: (Boolean) -> Unit
+) {
+    val pulsatingScale by rememberInfiniteTransition(label = "pulse").animateFloat(
+        initialValue = 1f,
+        targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = EaseInOutSine),
+            repeatMode = RepeatMode.Reverse
+        )
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(if (isServiceRunning) pulsatingScale else 1f)
+            .shadow(16.dp, RoundedCornerShape(20.dp)),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF1E1E2E).copy(alpha = 0.95f)
+        )
+    ) {
+        Box {
+            // Gradient overlay
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                Color(0xFF667EEA).copy(alpha = 0.1f),
+                                Color(0xFF764BA2).copy(alpha = 0.1f)
                             )
+                        )
+                    )
+            )
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly
-                            ) {
-                                OrientationItem("🧭\nYaw", orientationAngles[0], "°")
-                                OrientationItem("↕️\nPitch", orientationAngles[1], "°")
-                                OrientationItem("🔄\nRoll", orientationAngles[2], "°")
-                            }
-
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column {
                             Text(
-                                "Yaw: Left/Right • Pitch: Forward/Backward • Roll: Side tilt",
-                                fontSize = 11.sp,
-                                color = Color(0xFFADB5BD),
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth()
+                                "Android Sensor Stream",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF74C0FC)
                             )
                         }
                     }
                 }
 
-                // Sensor Data Table Card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(8.dp, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF0D4A2D).copy(alpha = 0.8f)
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Text(
-                            "📊 Motion Sensors",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            color = Color(0xFF51CF66)
-                        )
+                StatusInfoRow("🌐 Endpoint", "$targetIp:$targetPort")
 
-                        SensorDataTable(accelData, gyroData, magData)
-                    }
-                }
-
-                // Screen Rotation Card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(8.dp, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF495057).copy(alpha = 0.8f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "🔄 Screen Rotation: $rotation",
-                            fontSize = 16.sp,
-                            color = Color(0xFFF8F9FA),
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-
-                // Control Buttons
+                // Status row with toggle button
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
-                        onClick = {
-                            val intent = Intent(context, SensorService::class.java)
-                            context.startForegroundService(intent)
-                            serviceStatus = "🟢 Service Started"
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF51CF66)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
+                    Text(
+                        "⚡ Status",
+                        fontSize = 14.sp,
+                        color = Color(0xFFADB5BD),
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("▶️ Start Service", fontWeight = FontWeight.Bold)
+                        Text(
+                            serviceStatus,
+                            fontSize = 14.sp,
+                            color = when {
+                                serviceStatus.contains("Running") -> Color(0xFF51CF66)
+                                serviceStatus.contains("Stopped") -> Color(0xFFFF6B6B)
+                                else -> Color(0xFFFFD43B)
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        ServiceToggleButton(
+                            isServiceRunning = isServiceRunning,
+                            context = context,
+                            onServiceStatusChange = onServiceStatusChange,
+                            loggingEnabled = loggingEnabled
+                        )
+                    }
+                }
+
+                // Logging toggle row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "📝 Logging",
+                        fontSize = 14.sp,
+                        color = Color(0xFFADB5BD),
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            if (loggingEnabled) "Enabled" else "Disabled",
+                            fontSize = 14.sp,
+                            color = if (loggingEnabled) Color(0xFF51CF66) else Color(0xFFFF6B6B),
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Switch(
+                            checked = loggingEnabled,
+                            onCheckedChange = onLoggingToggle,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF51CF66),
+                                checkedTrackColor = Color(0xFF51CF66).copy(alpha = 0.5f),
+                                uncheckedThumbColor = Color(0xFFFF6B6B),
+                                uncheckedTrackColor = Color(0xFFFF6B6B).copy(alpha = 0.5f)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatusInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            fontSize = 14.sp,
+            color = Color(0xFFADB5BD),
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            value,
+            fontSize = 14.sp,
+            color = when {
+                value.contains("Running") -> Color(0xFF51CF66)
+                value.contains("Stopped") -> Color(0xFFFF6B6B)
+                value.contains(":") -> Color(0xFF74C0FC) // IP:Port in blue
+                else -> Color(0xFFFFD43B) // Other values in yellow
+            },
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+fun EnhancedOrientationCard(orientationAngles: FloatArray) {
+    val animatedRotation by rememberInfiniteTransition(label = "compass").animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(20000, easing = LinearEasing)
+        )
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(12.dp, RoundedCornerShape(20.dp)),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF2D1B69).copy(alpha = 0.9f)
+        )
+    ) {
+        Box {
+            // Animated background pattern
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFF9775FA).copy(alpha = 0.1f),
+                                Color.Transparent
+                            ),
+                            radius = 300f
+                        )
+                    )
+            )
+
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .rotate(animatedRotation)
+                            .background(
+                                Color(0xFF9775FA).copy(alpha = 0.2f),
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("🧭", fontSize = 20.sp)
                     }
 
-                    Button(
-                        onClick = {
-                            val intent = Intent(context, SensorService::class.java)
-                            context.stopService(intent)
-                            serviceStatus = "⏹️ Service Stopped"
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFF6B6B)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("⏹️ Stop Service", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Device Orientation",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        color = Color(0xFF9775FA)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    val axisData = listOf(
+                        Pair("🧭 Yaw", orientationAngles[0]),
+                        Pair("↕️ Pitch", orientationAngles[1]),
+                        Pair("🔄 Roll", orientationAngles[2])
+                    )
+
+                    axisData.forEach { (label, value) ->
+                        EnhancedOrientationItem(
+                            label = label,
+                            value = value
+                        )
                     }
                 }
             }
@@ -338,118 +492,230 @@ fun SensorUdpStreamer() {
 
 @SuppressLint("DefaultLocale")
 @Composable
-fun OrientationItem(label: String, value: Float, unit: String) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+fun EnhancedOrientationItem(
+    label: String,
+    value: Float
+) {
+    Card(
+        modifier = Modifier.size(width = 100.dp, height = 90.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF2A2A3E).copy(alpha = 0.6f)
+        ),
+        shape = RoundedCornerShape(16.dp)
     ) {
-        Text(
-            label,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = Color(0xFFADB5BD),
-            textAlign = TextAlign.Center
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFADB5BD),
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                "${String.format("%.1f", value)}°",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+fun EnhancedMotionSensorsCard(
+    accelData: FloatArray,
+    gyroData: FloatArray,
+    magData: FloatArray
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(12.dp, RoundedCornerShape(20.dp)),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF0D4A2D).copy(alpha = 0.9f)
         )
-        Text(
-            "${String.format("%.1f", value)}$unit",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-        )
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(
+                            Color(0xFF51CF66).copy(alpha = 0.2f),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("📊", fontSize = 20.sp)
+                }
+
+                Text(
+                    "Motion Sensors",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                    color = Color(0xFF51CF66)
+                )
+            }
+
+            EnhancedSensorDataTable(accelData, gyroData, magData)
+        }
     }
 }
 
 @SuppressLint("DefaultLocale")
 @Composable
-fun SensorDataTable(accelData: FloatArray, gyroData: FloatArray, magData: FloatArray) {
+fun EnhancedSensorDataTable(accelData: FloatArray, gyroData: FloatArray, magData: FloatArray) {
     Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(1.dp)
     ) {
         // Header Row
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Color(0xFF212529),
-                    RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
-                )
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF212529)
+            ),
+            shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
         ) {
-            Text(
-                "Axis",
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFFADB5BD),
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.Center
-            )
-            Text(
-                "🧭 Accel\n(m/s²)",
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF74C0FC),
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.Center,
-                fontSize = 12.sp
-            )
-            Text(
-                "🌀 Gyro\n(rad/s)",
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF9775FA),
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.Center,
-                fontSize = 12.sp
-            )
-            Text(
-                "🧲 Mag\n(μT)",
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFFFFD43B),
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.Center,
-                fontSize = 12.sp
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                TableHeaderCell("Axis", Color(0xFFADB5BD), weight = 0.5f)
+                TableHeaderCell("🚀 Accel\n(m/s²)", Color(0xFF74C0FC), weight = 1f)
+                TableHeaderCell("🌪️ Gyro\n(rad/s)", Color(0xFF9775FA), weight = 1f)
+                TableHeaderCell("🧲 Mag\n(μT)", Color(0xFFFFD43B), weight = 1f)
+            }
         }
 
         // Data Rows
         listOf("X", "Y", "Z").forEachIndexed { index, axis ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        if (index % 2 == 0) Color(0xFF2D3748).copy(alpha = 0.3f)
-                        else Color.Transparent
-                    )
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (index % 2 == 0)
+                        Color(0xFF2D3748).copy(alpha = 0.4f)
+                    else
+                        Color(0xFF1A202C).copy(alpha = 0.4f)
+                ),
+                shape = if (index == 2)
+                    RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+                else
+                    RoundedCornerShape(0.dp)
             ) {
-                Text(
-                    axis,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    String.format("%.3f", accelData[index]),
-                    color = Color(0xFF74C0FC),
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Center,
-                    fontSize = 14.sp
-                )
-                Text(
-                    String.format("%.3f", gyroData[index]),
-                    color = Color(0xFF9775FA),
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Center,
-                    fontSize = 14.sp
-                )
-                Text(
-                    String.format("%.3f", magData[index]),
-                    color = Color(0xFFFFD43B),
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Center,
-                    fontSize = 14.sp
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    TableDataCell(axis, Color.White, FontWeight.Bold, weight = 0.5f)
+                    TableDataCell(String.format("%.3f", accelData[index]), Color(0xFF74C0FC), weight = 1f)
+                    TableDataCell(String.format("%.3f", gyroData[index]), Color(0xFF9775FA), weight = 1f)
+                    TableDataCell(String.format("%.3f", magData[index]), Color(0xFFFFD43B), weight = 1f)
+                }
             }
         }
+    }
+}
+
+@Composable
+fun RowScope.TableHeaderCell(text: String, color: Color, weight: Float = 1f) {
+    Text(
+        text,
+        fontWeight = FontWeight.Bold,
+        color = color,
+        modifier = Modifier.weight(weight),
+        textAlign = TextAlign.Center,
+        fontSize = 11.sp
+    )
+}
+
+@Composable
+fun RowScope.TableDataCell(
+    text: String,
+    color: Color,
+    fontWeight: FontWeight = FontWeight.Normal,
+    weight: Float = 1f
+) {
+    Text(
+        text,
+        color = color,
+        fontWeight = fontWeight,
+        modifier = Modifier.weight(weight),
+        textAlign = TextAlign.Center,
+        fontSize = 12.sp
+    )
+}
+
+@Composable
+fun ServiceToggleButton(
+    isServiceRunning: Boolean,
+    context: Context,
+    onServiceStatusChange: (String, Boolean) -> Unit,
+    loggingEnabled: Boolean
+) {
+    val animatedColor by animateColorAsState(
+        targetValue = if (isServiceRunning) Color(0xFFFF6B6B) else Color(0xFF51CF66),
+        animationSpec = tween(300),
+        label = "button_color"
+    )
+
+    val animatedScale by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "button_scale"
+    )
+
+    Button(
+        onClick = {
+            val intent = Intent(context, SensorService::class.java).apply {
+                putExtra("logging_enabled", loggingEnabled)
+            }
+            if (isServiceRunning) {
+                context.stopService(intent)
+                onServiceStatusChange("⏹️ Service Stopped", false)
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                onServiceStatusChange("🟢 Service Running", true)
+            }
+        },
+        modifier = Modifier
+            .scale(animatedScale)
+            .height(36.dp)
+            .width(80.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = animatedColor,
+            contentColor = Color.White
+        ),
+        shape = RoundedCornerShape(12.dp),
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = 4.dp,
+            pressedElevation = 6.dp
+        ),
+        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 1.dp)
+    ) {
+        Text(
+            if (isServiceRunning) "Stop" else "Start",
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp
+        )
     }
 }
