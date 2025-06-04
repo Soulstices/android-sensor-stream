@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,10 +33,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.example.myapplication.ui.theme.MyApplicationTheme
+import androidx.core.content.edit
 
 class MainActivity : ComponentActivity() {
     private var serviceIntent: Intent? = null
@@ -71,6 +75,11 @@ fun SensorUdpStreamer() {
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     }
 
+    // SharedPreferences for network settings
+    val sharedPrefs = remember {
+        context.getSharedPreferences("sensor_service_prefs", Context.MODE_PRIVATE)
+    }
+
     val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
     val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
@@ -84,21 +93,44 @@ fun SensorUdpStreamer() {
     var isServiceRunning by remember { mutableStateOf(true) }
     var loggingEnabled by remember { mutableStateOf(false) }
 
+    // Network settings
+    var targetIp by remember {
+        mutableStateOf(sharedPrefs.getString("target_ip", "127.0.0.1") ?: "127.0.0.1")
+    }
+    var targetPort by remember {
+        mutableIntStateOf(sharedPrefs.getInt("target_port", 9999))
+    }
+    var showNetworkDialog by remember { mutableStateOf(false) }
+
     // Function to handle service status changes
     val onServiceStatusChange: (String, Boolean) -> Unit = { status, running ->
         serviceStatus = status
         isServiceRunning = running
     }
 
-    // Function to restart service with logging state
-    val restartServiceWithLogging: () -> Unit = {
+    // Function to restart service with current settings
+    val restartServiceWithSettings: () -> Unit = {
         if (isServiceRunning) {
             val intent = Intent(context, SensorService::class.java).apply {
                 putExtra("logging_enabled", loggingEnabled)
+                putExtra("target_ip", targetIp)
+                putExtra("target_port", targetPort)
             }
             context.stopService(intent)
             context.startForegroundService(intent)
         }
+    }
+
+    // Function to update network settings
+    val updateNetworkSettings: (String, Int) -> Unit = { ip, port ->
+        targetIp = ip
+        targetPort = port
+        // Save to SharedPreferences
+        sharedPrefs.edit {
+            putString("target_ip", ip)
+                .putInt("target_port", port)
+        }
+        restartServiceWithSettings()
     }
 
     DisposableEffect(Unit) {
@@ -131,9 +163,20 @@ fun SensorUdpStreamer() {
         onDispose { sensorManager.unregisterListener(listener) }
     }
 
+    // Network Settings Dialog
+    if (showNetworkDialog) {
+        NetworkSettingsDialog(
+            currentIp = targetIp,
+            currentPort = targetPort,
+            onDismiss = { showNetworkDialog = false },
+            onConfirm = { ip, port ->
+                updateNetworkSettings(ip, port)
+                showNetworkDialog = false
+            }
+        )
+    }
+
     val scrollState = rememberScrollState()
-    val targetIp = "10.47.80.118"
-    val targetPort = 9999
 
     Box(
         modifier = Modifier
@@ -174,8 +217,9 @@ fun SensorUdpStreamer() {
                     loggingEnabled = loggingEnabled,
                     onLoggingToggle = { enabled ->
                         loggingEnabled = enabled
-                        restartServiceWithLogging()
-                    }
+                        restartServiceWithSettings()
+                    },
+                    onNetworkSettingsClick = { showNetworkDialog = true }
                 )
 
                 // Enhanced Orientation Card
@@ -187,6 +231,204 @@ fun SensorUdpStreamer() {
                 EnhancedMotionSensorsCard(accelData, gyroData, magData)
 
                 Spacer(modifier = Modifier.height(32.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun NetworkSettingsDialog(
+    currentIp: String,
+    currentPort: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (String, Int) -> Unit
+) {
+    var ipText by remember { mutableStateOf(currentIp) }
+    var portText by remember { mutableStateOf(currentPort.toString()) }
+    var ipError by remember { mutableStateOf(false) }
+    var portError by remember { mutableStateOf(false) }
+    var ipErrorMessage by remember { mutableStateOf("") }
+
+    // Function to validate IP address format
+    fun isValidIpAddress(ip: String): Boolean {
+        if (ip.isBlank()) return false
+
+        val parts = ip.split(".")
+        if (parts.size != 4) return false
+
+        return parts.all { part ->
+            try {
+                val num = part.toInt()
+                num in 0..255 && part == num.toString() // Ensures no leading zeros like "01"
+            } catch (_: NumberFormatException) {
+                false
+            }
+        }
+    }
+
+    // Function to filter IP input - only allow digits and dots
+    fun filterIpInput(input: String): String {
+        return input.filter { char -> char.isDigit() || char == '.' }
+            .let { filtered ->
+                // Prevent multiple consecutive dots
+                var result = ""
+                var lastWasDot = false
+                for (char in filtered) {
+                    if (char == '.') {
+                        if (!lastWasDot && result.isNotEmpty()) {
+                            result += char
+                            lastWasDot = true
+                        }
+                    } else {
+                        result += char
+                        lastWasDot = false
+                    }
+                }
+                result
+            }
+            .let { filtered ->
+                // Limit each octet to 3 digits and validate range
+                val parts = filtered.split(".")
+                if (parts.size <= 4) {
+                    parts.mapIndexed { index, part ->
+                        if (part.length <= 3) {
+                            val num = part.toIntOrNull()
+                            if (num != null && num <= 255) part else part.dropLast(1)
+                        } else {
+                            part.take(3)
+                        }
+                    }.joinToString(".")
+                } else {
+                    // If more than 4 parts, take only first 4
+                    parts.take(4).joinToString(".")
+                }
+            }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF1E1E2E)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    "Network Settings",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF74C0FC)
+                )
+
+                // IP Address Field
+                OutlinedTextField(
+                    value = ipText,
+                    onValueChange = { input ->
+                        val filtered = filterIpInput(input)
+                        ipText = filtered
+                        ipError = false
+                        ipErrorMessage = ""
+                    },
+                    label = { Text("IP Address", color = Color(0xFFADB5BD)) },
+                    placeholder = { Text("127.0.0.1", color = Color(0xFF6C757D)) },
+                    isError = ipError,
+                    supportingText = if (ipError) {
+                        { Text(ipErrorMessage, color = Color(0xFFFF6B6B), fontSize = 12.sp) }
+                    } else {
+                        { Text("Format: 192.168.1.1", color = Color(0xFF6C757D), fontSize = 11.sp) }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = if (ipError) Color(0xFFFF6B6B) else Color(0xFF74C0FC),
+                        unfocusedBorderColor = if (ipError) Color(0xFFFF6B6B) else Color(0xFF495057),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        cursorColor = Color(0xFF74C0FC),
+                        errorBorderColor = Color(0xFFFF6B6B)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Port Field
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { input ->
+                        // Filter to only allow digits and limit to 5 characters (max port is 65535)
+                        val filtered = input.filter { char -> char.isDigit() }.take(5)
+                        portText = filtered
+                        portError = false
+                    },
+                    label = { Text("Port", color = Color(0xFFADB5BD)) },
+                    placeholder = { Text("9999", color = Color(0xFF6C757D)) },
+                    supportingText = if (portError) {
+                        { Text("Port must be between 1 and 65535", color = Color(0xFFFF6B6B), fontSize = 12.sp) }
+                    } else {
+                        { Text("Range: 1-65535", color = Color(0xFF6C757D), fontSize = 11.sp) }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = portError,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = if (portError) Color(0xFFFF6B6B) else Color(0xFF74C0FC),
+                        unfocusedBorderColor = if (portError) Color(0xFFFF6B6B) else Color(0xFF495057),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        cursorColor = Color(0xFF74C0FC),
+                        errorBorderColor = Color(0xFFFF6B6B)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFADB5BD)
+                        )
+                    ) {
+                        Text("Cancel")
+                    }
+
+                    Button(
+                        onClick = {
+                            val port = portText.toIntOrNull()
+                            val isIpValid = isValidIpAddress(ipText)
+                            val isPortValid = port != null && port in 1..65535
+
+                            when {
+                                !isIpValid -> {
+                                    ipError = true
+                                    ipErrorMessage = when {
+                                        ipText.isBlank() -> "IP address cannot be empty"
+                                        ipText.split(".").size != 4 -> "IP must have 4 parts separated by dots"
+                                        else -> "Invalid IP address format"
+                                    }
+                                }
+                                !isPortValid -> {
+                                    portError = true
+                                }
+                                else -> {
+                                    onConfirm(ipText, port)
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF74C0FC)
+                        )
+                    ) {
+                        Text("Save", color = Color.White)
+                    }
+                }
             }
         }
     }
@@ -235,7 +477,8 @@ fun EnhancedHeaderCard(
     context: Context,
     onServiceStatusChange: (String, Boolean) -> Unit,
     loggingEnabled: Boolean,
-    onLoggingToggle: (Boolean) -> Unit
+    onLoggingToggle: (Boolean) -> Unit,
+    onNetworkSettingsClick: () -> Unit
 ) {
     val pulsatingScale by rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue = 1f,
@@ -261,7 +504,7 @@ fun EnhancedHeaderCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(160.dp)
+                    .height(200.dp)
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
@@ -296,7 +539,45 @@ fun EnhancedHeaderCard(
                     }
                 }
 
-                StatusInfoRow("🌐 Endpoint", "$targetIp:$targetPort")
+                // Network endpoint row with settings button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "🌐 Endpoint",
+                        fontSize = 14.sp,
+                        color = Color(0xFFADB5BD),
+                        fontWeight = FontWeight.Medium
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "$targetIp:$targetPort",
+                            fontSize = 14.sp,
+                            color = Color(0xFF74C0FC),
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Button(
+                            onClick = onNetworkSettingsClick,
+                            modifier = Modifier
+                                .height(32.dp)
+                                .width(60.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF74C0FC),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text("Edit", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
 
                 // Status row with toggle button
                 Row(
@@ -330,7 +611,9 @@ fun EnhancedHeaderCard(
                             isServiceRunning = isServiceRunning,
                             context = context,
                             onServiceStatusChange = onServiceStatusChange,
-                            loggingEnabled = loggingEnabled
+                            loggingEnabled = loggingEnabled,
+                            targetIp = targetIp,
+                            targetPort = targetPort
                         )
                     }
                 }
@@ -373,33 +656,6 @@ fun EnhancedHeaderCard(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun StatusInfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            fontSize = 14.sp,
-            color = Color(0xFFADB5BD),
-            fontWeight = FontWeight.Medium
-        )
-        Text(
-            value,
-            fontSize = 14.sp,
-            color = when {
-                value.contains("Running") -> Color(0xFF51CF66)
-                value.contains("Stopped") -> Color(0xFFFF6B6B)
-                value.contains(":") -> Color(0xFF74C0FC) // IP:Port in blue
-                else -> Color(0xFFFFD43B) // Other values in yellow
-            },
-            fontWeight = FontWeight.Bold
-        )
     }
 }
 
@@ -666,7 +922,9 @@ fun ServiceToggleButton(
     isServiceRunning: Boolean,
     context: Context,
     onServiceStatusChange: (String, Boolean) -> Unit,
-    loggingEnabled: Boolean
+    loggingEnabled: Boolean,
+    targetIp: String,
+    targetPort: Int
 ) {
     val animatedColor by animateColorAsState(
         targetValue = if (isServiceRunning) Color(0xFFFF6B6B) else Color(0xFF51CF66),
@@ -684,6 +942,8 @@ fun ServiceToggleButton(
         onClick = {
             val intent = Intent(context, SensorService::class.java).apply {
                 putExtra("logging_enabled", loggingEnabled)
+                putExtra("target_ip", targetIp)
+                putExtra("target_port", targetPort)
             }
             if (isServiceRunning) {
                 context.stopService(intent)
