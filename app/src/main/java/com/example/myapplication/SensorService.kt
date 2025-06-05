@@ -25,11 +25,12 @@ class SensorService : Service(), SensorEventListener {
     private companion object {
         const val NOTIFICATION_ID = 1
         const val CHANNEL_ID = "SensorServiceChannel"
-        const val UPDATE_INTERVAL = 5L // milliseconds
+        const val DEFAULT_UPDATE_INTERVAL = 5L // milliseconds
         const val EXTRA_LOGGING_ENABLED = "logging_enabled"
         const val PREFS_NAME = "sensor_service_prefs"
         const val PREF_TARGET_IP = "target_ip"
         const val PREF_TARGET_PORT = "target_port"
+        const val PREF_UPDATE_INTERVAL = "update_interval"
         const val DEFAULT_IP = "127.0.0.1"
         const val DEFAULT_PORT = 9999
     }
@@ -53,13 +54,14 @@ class SensorService : Service(), SensorEventListener {
     private lateinit var sharedPrefs: SharedPreferences
     private var targetIp: String = DEFAULT_IP
     private var targetPort: Int = DEFAULT_PORT
+    private var updateInterval: Long = DEFAULT_UPDATE_INTERVAL
 
     override fun onCreate() {
         super.onCreate()
 
         // Initialize SharedPreferences
         sharedPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        loadNetworkSettings()
+        loadSettings()
 
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -78,24 +80,36 @@ class SensorService : Service(), SensorEventListener {
         startUdpStreaming()
     }
 
-    private fun loadNetworkSettings() {
+    private fun loadSettings() {
         targetIp = sharedPrefs.getString(PREF_TARGET_IP, DEFAULT_IP) ?: DEFAULT_IP
         targetPort = sharedPrefs.getInt(PREF_TARGET_PORT, DEFAULT_PORT)
+        updateInterval = sharedPrefs.getLong(PREF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
             loggingEnabled = it.getBooleanExtra(EXTRA_LOGGING_ENABLED, false)
 
-            // Check if new network settings are provided
+            // Check if new settings are provided
             val newIp = it.getStringExtra("target_ip")
             val newPort = it.getIntExtra("target_port", -1)
+            val newInterval = it.getLongExtra("update_interval", -1L)
+
+            var settingsChanged = false
 
             if (newIp != null && newPort != -1) {
                 targetIp = newIp
                 targetPort = newPort
-                saveNetworkSettings()
+                settingsChanged = true
+            }
 
+            if (newInterval != -1L) {
+                updateInterval = newInterval
+                settingsChanged = true
+            }
+
+            if (settingsChanged) {
+                saveSettings()
                 // Restart UDP streaming with new settings
                 restartUdpStreaming()
             }
@@ -107,10 +121,11 @@ class SensorService : Service(), SensorEventListener {
         return START_STICKY
     }
 
-    private fun saveNetworkSettings() {
+    private fun saveSettings() {
         sharedPrefs.edit {
             putString(PREF_TARGET_IP, targetIp)
-                .putInt(PREF_TARGET_PORT, targetPort)
+            putInt(PREF_TARGET_PORT, targetPort)
+            putLong(PREF_UPDATE_INTERVAL, updateInterval)
         }
     }
 
@@ -157,7 +172,7 @@ class SensorService : Service(), SensorEventListener {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Sensor Streaming Active")
-                .setContentText("Streaming sensor data to $targetIp:$targetPort")
+                .setContentText("Streaming to $targetIp:$targetPort (${updateInterval}ms)")
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -166,7 +181,7 @@ class SensorService : Service(), SensorEventListener {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
                 .setContentTitle("Sensor Streaming Active")
-                .setContentText("Streaming sensor data to $targetIp:$targetPort")
+                .setContentText("Streaming to $targetIp:$targetPort (${updateInterval}ms)")
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -219,6 +234,7 @@ class SensorService : Service(), SensorEventListener {
                             })
                             put("logging", loggingEnabled)
                             put("timestamp", System.currentTimeMillis())
+                            put("update_interval_ms", updateInterval)
                         }
 
                         val message = json.toString()
@@ -232,7 +248,7 @@ class SensorService : Service(), SensorEventListener {
                         )
                         udpSocket?.send(packet)
 
-                        if (System.currentTimeMillis() % 300000 < UPDATE_INTERVAL) {
+                        if (System.currentTimeMillis() % 300000 < updateInterval) {
                             wakeLock?.let { wl ->
                                 if (wl.isHeld) wl.release()
                                 wl.acquire(10 * 60 * 1000L)
@@ -241,7 +257,7 @@ class SensorService : Service(), SensorEventListener {
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
-                    delay(UPDATE_INTERVAL)
+                    delay(updateInterval)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()

@@ -75,7 +75,7 @@ fun SensorUdpStreamer() {
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     }
 
-    // SharedPreferences for network settings
+    // SharedPreferences for settings
     val sharedPrefs = remember {
         context.getSharedPreferences("sensor_service_prefs", Context.MODE_PRIVATE)
     }
@@ -93,12 +93,15 @@ fun SensorUdpStreamer() {
     var isServiceRunning by remember { mutableStateOf(true) }
     var loggingEnabled by remember { mutableStateOf(false) }
 
-    // Network settings
+    // Settings
     var targetIp by remember {
         mutableStateOf(sharedPrefs.getString("target_ip", "127.0.0.1") ?: "127.0.0.1")
     }
     var targetPort by remember {
         mutableIntStateOf(sharedPrefs.getInt("target_port", 9999))
+    }
+    var updateInterval by remember {
+        mutableLongStateOf(sharedPrefs.getLong("update_interval", 5L))
     }
     var showNetworkDialog by remember { mutableStateOf(false) }
 
@@ -115,20 +118,23 @@ fun SensorUdpStreamer() {
                 putExtra("logging_enabled", loggingEnabled)
                 putExtra("target_ip", targetIp)
                 putExtra("target_port", targetPort)
+                putExtra("update_interval", updateInterval)
             }
             context.stopService(intent)
             context.startForegroundService(intent)
         }
     }
 
-    // Function to update network settings
-    val updateNetworkSettings: (String, Int) -> Unit = { ip, port ->
+    // Function to update settings
+    val updateSettings: (String, Int, Long) -> Unit = { ip, port, interval ->
         targetIp = ip
         targetPort = port
+        updateInterval = interval
         // Save to SharedPreferences
         sharedPrefs.edit {
             putString("target_ip", ip)
-                .putInt("target_port", port)
+            putInt("target_port", port)
+            putLong("update_interval", interval)
         }
         restartServiceWithSettings()
     }
@@ -168,9 +174,10 @@ fun SensorUdpStreamer() {
         NetworkSettingsDialog(
             currentIp = targetIp,
             currentPort = targetPort,
+            currentUpdateInterval = updateInterval,
             onDismiss = { showNetworkDialog = false },
-            onConfirm = { ip, port ->
-                updateNetworkSettings(ip, port)
+            onConfirm = { ip, port, interval ->
+                updateSettings(ip, port, interval)
                 showNetworkDialog = false
             }
         )
@@ -210,6 +217,7 @@ fun SensorUdpStreamer() {
                 EnhancedHeaderCard(
                     targetIp = targetIp,
                     targetPort = targetPort,
+                    updateInterval = updateInterval,
                     serviceStatus = serviceStatus,
                     isServiceRunning = isServiceRunning,
                     context = context,
@@ -240,13 +248,16 @@ fun SensorUdpStreamer() {
 fun NetworkSettingsDialog(
     currentIp: String,
     currentPort: Int,
+    currentUpdateInterval: Long,
     onDismiss: () -> Unit,
-    onConfirm: (String, Int) -> Unit
+    onConfirm: (String, Int, Long) -> Unit
 ) {
     var ipText by remember { mutableStateOf(currentIp) }
     var portText by remember { mutableStateOf(currentPort.toString()) }
+    var intervalText by remember { mutableStateOf(currentUpdateInterval.toString()) }
     var ipError by remember { mutableStateOf(false) }
     var portError by remember { mutableStateOf(false) }
+    var intervalError by remember { mutableStateOf(false) }
     var ipErrorMessage by remember { mutableStateOf("") }
 
     // Function to validate IP address format
@@ -320,7 +331,7 @@ fun NetworkSettingsDialog(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    "Network Settings",
+                    "Streaming Settings",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF74C0FC)
@@ -384,6 +395,35 @@ fun NetworkSettingsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                // Update Interval Field
+                OutlinedTextField(
+                    value = intervalText,
+                    onValueChange = { input ->
+                        // Filter to only allow digits and limit to reasonable length
+                        val filtered = input.filter { char -> char.isDigit() }.take(6)
+                        intervalText = filtered
+                        intervalError = false
+                    },
+                    label = { Text("Update Interval (ms)", color = Color(0xFFADB5BD)) },
+                    placeholder = { Text("5", color = Color(0xFF6C757D)) },
+                    supportingText = if (intervalError) {
+                        { Text("Interval must be between 1 and 10000 ms", color = Color(0xFFFF6B6B), fontSize = 12.sp) }
+                    } else {
+                        { Text("Range: 1-10000 ms (lower = faster)", color = Color(0xFF6C757D), fontSize = 11.sp) }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = intervalError,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = if (intervalError) Color(0xFFFF6B6B) else Color(0xFF74C0FC),
+                        unfocusedBorderColor = if (intervalError) Color(0xFFFF6B6B) else Color(0xFF495057),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        cursorColor = Color(0xFF74C0FC),
+                        errorBorderColor = Color(0xFFFF6B6B)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -401,8 +441,10 @@ fun NetworkSettingsDialog(
                     Button(
                         onClick = {
                             val port = portText.toIntOrNull()
+                            val interval = intervalText.toLongOrNull()
                             val isIpValid = isValidIpAddress(ipText)
                             val isPortValid = port != null && port in 1..65535
+                            val isIntervalValid = interval != null && interval in 1..10000
 
                             when {
                                 !isIpValid -> {
@@ -416,8 +458,11 @@ fun NetworkSettingsDialog(
                                 !isPortValid -> {
                                     portError = true
                                 }
+                                !isIntervalValid -> {
+                                    intervalError = true
+                                }
                                 else -> {
-                                    onConfirm(ipText, port)
+                                    onConfirm(ipText, port, interval)
                                 }
                             }
                         },
@@ -472,6 +517,7 @@ fun AnimatedBackgroundParticles() {
 fun EnhancedHeaderCard(
     targetIp: String,
     targetPort: Int,
+    updateInterval: Long,
     serviceStatus: String,
     isServiceRunning: Boolean,
     context: Context,
@@ -504,7 +550,7 @@ fun EnhancedHeaderCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .height(240.dp)
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
@@ -579,6 +625,26 @@ fun EnhancedHeaderCard(
                     }
                 }
 
+                // Update interval row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "⏱️ Interval",
+                        fontSize = 14.sp,
+                        color = Color(0xFFADB5BD),
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        "${updateInterval}ms",
+                        fontSize = 14.sp,
+                        color = Color(0xFFFFD43B),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
                 // Status row with toggle button
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -613,7 +679,8 @@ fun EnhancedHeaderCard(
                             onServiceStatusChange = onServiceStatusChange,
                             loggingEnabled = loggingEnabled,
                             targetIp = targetIp,
-                            targetPort = targetPort
+                            targetPort = targetPort,
+                            updateInterval = updateInterval
                         )
                     }
                 }
@@ -924,7 +991,8 @@ fun ServiceToggleButton(
     onServiceStatusChange: (String, Boolean) -> Unit,
     loggingEnabled: Boolean,
     targetIp: String,
-    targetPort: Int
+    targetPort: Int,
+    updateInterval: Long
 ) {
     val animatedColor by animateColorAsState(
         targetValue = if (isServiceRunning) Color(0xFFFF6B6B) else Color(0xFF51CF66),
@@ -944,6 +1012,7 @@ fun ServiceToggleButton(
                 putExtra("logging_enabled", loggingEnabled)
                 putExtra("target_ip", targetIp)
                 putExtra("target_port", targetPort)
+                putExtra("update_interval", updateInterval)
             }
             if (isServiceRunning) {
                 context.stopService(intent)
